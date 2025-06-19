@@ -1,0 +1,317 @@
+import xml.etree.ElementTree as ET
+import re
+import os
+import zipfile
+import shutil
+import tempfile
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+from tkinter.scrolledtext import ScrolledText
+import threading
+
+
+class DocxProcessorApp:
+    def __init__(self, root):
+        # 设置窗口基本信息和样式
+        self.root = root
+        self.root.title("DOCX内容替换工具")
+        self.root.geometry("700x500")
+        self.root.resizable(True, True)
+
+        self.style = ttk.Style()
+        self.style.configure("TFrame", background="#f0f0f0")
+        self.style.configure("TLabel", background="#f0f0f0", font=("Arial", 10))
+        self.style.configure("TButton", font=("Arial", 10))
+        self.style.configure("Title.TLabel", background="#f0f0f0", font=("Arial", 14, "bold"))
+
+        # 主框架
+        self.main_frame = ttk.Frame(root, padding=20)
+        self.main_frame.pack(fill=tk.BOTH, expand=True)
+
+        # 标题
+        title_label = ttk.Label(self.main_frame, text="DOCX内容替换工具", style="Title.TLabel")
+        title_label.pack(pady=10)
+
+        # 输入文件选择区域
+        input_frame = ttk.Frame(self.main_frame)
+        input_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Label(input_frame, text="输入文件:").pack(side=tk.LEFT, padx=(0, 10))
+        self.input_entry = ttk.Entry(input_frame, width=50)
+        self.input_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+
+        self.browse_input_btn = ttk.Button(input_frame, text="浏览...", command=self.browse_input_file)
+        self.browse_input_btn.pack(side=tk.LEFT)
+
+        # 输出文件选择区域
+        output_frame = ttk.Frame(self.main_frame)
+        output_frame.pack(fill=tk.X, pady=10)
+
+        ttk.Label(output_frame, text="输出文件:").pack(side=tk.LEFT, padx=(0, 10))
+        self.output_entry = ttk.Entry(output_frame, width=50)
+        self.output_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+
+        self.browse_output_btn = ttk.Button(output_frame, text="浏览...", command=self.browse_output_file)
+        self.browse_output_btn.pack(side=tk.LEFT)
+
+        # 替换选项
+        options_frame = ttk.Frame(self.main_frame)
+        options_frame.pack(fill=tk.X, pady=10)
+
+        self.time_var = tk.BooleanVar(value=True)
+        self.money_var = tk.BooleanVar(value=True)
+
+        ttk.Checkbutton(options_frame, text="替换时间 (替换为: 2020年1月1日)", variable=self.time_var).pack(anchor=tk.W)
+        ttk.Checkbutton(options_frame, text="替换金额 (替换为: 888,888.888亿元)", variable=self.money_var).pack(anchor=tk.W)
+
+        # 开始处理按钮
+        self.process_btn = ttk.Button(
+            self.main_frame,
+            text="开始处理",
+            command=self.start_processing,
+            style="Accent.TButton"
+        )
+        self.process_btn.pack(pady=20)
+
+        # 日志输出区域
+        log_frame = ttk.Frame(self.main_frame)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(log_frame, text="处理日志:").pack(anchor=tk.W)
+
+        self.log_area = ScrolledText(log_frame, height=10, font=("Consolas", 9))
+        self.log_area.pack(fill=tk.BOTH, expand=True)
+        self.log_area.config(state=tk.DISABLED)
+
+        # 状态栏
+        self.status_var = tk.StringVar(value="就绪")
+        status_bar = ttk.Label(root, textvariable=self.status_var, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # 自定义按钮样式
+        self.style.configure("Accent.TButton", background="#4caf50", foreground="white")
+        self.style.map("Accent.TButton", background=[('active', '#45a049'), ('pressed', '#3d8b40')])
+
+        # 设置默认路径
+        self.input_entry.insert(0, os.path.expanduser("~/Downloads/input.docx"))
+        self.output_entry.insert(0, os.path.expanduser("~/Downloads/output.docx"))
+
+    # 选择输入文件
+    def browse_input_file(self):
+        file_path = filedialog.askopenfilename(
+            title="选择输入文件",
+            filetypes=[("Word文档", "*.docx"), ("所有文件", "*.*")]
+        )
+        if file_path:
+            self.input_entry.delete(0, tk.END)
+            self.input_entry.insert(0, file_path)
+
+            # 自动生成输出路径
+            dir_name, file_name = os.path.split(file_path)
+            name, ext = os.path.splitext(file_name)
+            output_path = os.path.join(dir_name, f"{name}_处理版{ext}")
+            self.output_entry.delete(0, tk.END)
+            self.output_entry.insert(0, output_path)
+
+    # 选择输出文件
+    def browse_output_file(self):
+        file_path = filedialog.asksaveasfilename(
+            title="选择输出文件",
+            filetypes=[("Word文档", "*.docx"), ("所有文件", "*.*")],
+            defaultextension=".docx"
+        )
+        if file_path:
+            self.output_entry.delete(0, tk.END)
+            self.output_entry.insert(0, file_path)
+
+    # 日志输出
+    def log_message(self, message):
+        self.log_area.config(state=tk.NORMAL)
+        self.log_area.insert(tk.END, message + "\n")
+        self.log_area.see(tk.END)
+        self.log_area.config(state=tk.DISABLED)
+        self.status_var.set(message)
+        self.root.update_idletasks()
+
+    # 启动处理流程
+    def start_processing(self):
+        input_path = self.input_entry.get()
+        output_path = self.output_entry.get()
+
+        if not input_path or not output_path:
+            messagebox.showerror("错误", "请选择输入和输出文件路径！")
+            return
+
+        if not os.path.exists(input_path):
+            messagebox.showerror("错误", f"输入文件不存在:\n{input_path}")
+            return
+
+        self.process_btn.config(state=tk.DISABLED)
+        self.log_message("开始处理文档...")
+
+        # 使用线程防止界面卡顿
+        thread = threading.Thread(
+            target=self.process_docx,
+            args=(input_path, output_path),
+            daemon=True
+        )
+        thread.start()
+
+    # 主处理函数（解压、修改、压缩）
+    def process_docx(self, input_path, output_path):
+        try:
+            # 清空旧日志
+            self.log_area.config(state=tk.NORMAL)
+            self.log_area.delete(1.0, tk.END)
+            self.log_area.config(state=tk.DISABLED)
+
+            self.log_message(f"输入文件: {input_path}")
+            self.log_message(f"输出文件: {output_path}")
+            self.log_message(f"替换时间: {'是' if self.time_var.get() else '否'}")
+            self.log_message(f"替换金额: {'是' if self.money_var.get() else '否'}")
+
+            # 创建临时目录用于操作
+            temp_dir = tempfile.mkdtemp()
+            self.log_message(f"创建临时目录: {temp_dir}")
+
+            # 解压 DOCX 文件
+            self.log_message("解压DOCX文件...")
+            with zipfile.ZipFile(input_path, 'r') as zip_ref:
+                zip_ref.extractall(temp_dir)
+
+            # 修改 document.xml
+            document_path = os.path.join(temp_dir, 'word', 'document.xml')
+            if os.path.exists(document_path):
+                self.log_message("找到document.xml文件，开始处理内容...")
+
+                with open(document_path, 'r', encoding='utf-8') as f:
+                    xml_content = f.read()
+
+                modified_xml = self.modify_document_xml(xml_content)
+
+                with open(document_path, 'w', encoding='utf-8') as f:
+                    f.write(modified_xml)
+
+                self.log_message("内容处理完成！")
+            else:
+                self.log_message("警告: 未找到document.xml文件")
+
+            # 压缩成新的 DOCX 文件
+            self.log_message("创建新的DOCX文件...")
+            with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zip_out:
+                for root_dir, _, files in os.walk(temp_dir):
+                    for file in files:
+                        file_path = os.path.join(root_dir, file)
+                        rel_path = os.path.relpath(file_path, temp_dir)
+                        zip_out.write(file_path, rel_path)
+                        self.log_message(f"添加文件: {rel_path}")
+
+            # 删除临时目录
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            self.log_message("清理临时文件完成！")
+
+            self.log_message(f"处理成功！文件已保存至: {output_path}")
+            self.status_var.set("处理完成！")
+            messagebox.showinfo("成功", "文档处理完成！")
+
+        except Exception as e:
+            self.log_message(f"处理过程中出错: {str(e)}")
+            messagebox.showerror("错误", f"处理过程中发生错误:\n{str(e)}")
+        finally:
+            self.process_btn.config(state=tk.NORMAL)
+
+    # 修改 XML 内容：替换时间和金额
+    def modify_document_xml(self, xml_content):
+        namespaces = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+        for prefix, uri in namespaces.items():
+            ET.register_namespace(prefix, uri)
+
+        try:
+            root = ET.fromstring(xml_content)
+        except Exception as e:
+            self.log_message(f"解析XML内容时出错: {e}")
+            return xml_content
+
+        # 匹配正则
+        time_pattern = r'20\d{2}年[0-9]{1,2}月[0-9]{1,2}日|20\d{2}年[0-9]{1,2}月|[0-9]{4}年[0-9]{1,2}月[0-9]{1,2}日|\d{4}年\d{1,2}-\d{1,2}月'
+        money_pattern = r'-?\d{1,3}(?:,\d{3})*(?:\.\d+)?亿元'
+
+        for p in root.findall('.//w:p', namespaces):
+            runs = list(p.findall('w:r', namespaces))
+            if not runs:
+                continue
+
+            text_parts = []
+            run_map = []
+
+            for r in runs:
+                t = r.find('w:t', namespaces)
+                text = t.text if t is not None and t.text else ''
+                text_parts.append(text)
+                run_map.append((r, text))
+
+            full_text = ''.join(text_parts)
+            replacements = []
+
+            # 查找时间
+            if self.time_var.get():
+                for m in re.finditer(time_pattern, full_text):
+                    start, end = m.span()
+                    pos = 0
+                    for i, (r, text) in enumerate(run_map):
+                        if start < pos + len(text):
+                            replacements.append((start, end, 'time', i))
+                            break
+                        pos += len(text)
+
+            # 查找金额
+            if self.money_var.get():
+                for m in re.finditer(money_pattern, full_text):
+                    start, end = m.span()
+                    pos = 0
+                    for i, (r, text) in enumerate(run_map):
+                        if start < pos + len(text):
+                            replacements.append((start, end, 'money', i))
+                            break
+                        pos += len(text)
+
+            # 替换时从后往前
+            replacements.sort(key=lambda x: x[0], reverse=True)
+
+            for start, end, r_type, first_run_idx in replacements:
+                first_run, first_text = run_map[first_run_idx]
+                rPr = first_run.find('w:rPr', namespaces)
+
+                new_r = ET.Element('{http://schemas.openxmlformats.org/wordprocessingml/2006/main}r')
+                if rPr is not None:
+                    new_r.append(ET.fromstring(ET.tostring(rPr, encoding='unicode')))
+
+                new_t = ET.SubElement(new_r, '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t')
+                new_t.text = "2020年1月1日" if r_type == 'time' else "888,888.888亿元"
+
+                affected_indices = []
+                current_pos = 0
+                for i, (r, text) in enumerate(run_map):
+                    run_start = current_pos
+                    run_end = current_pos + len(text)
+                    current_pos = run_end
+                    if run_end > start and run_start < end:
+                        affected_indices.append(i)
+
+                for i in sorted(affected_indices, reverse=True):
+                    if run_map[i][0] in p:
+                        p.remove(run_map[i][0])
+                    if i < len(run_map):
+                        del run_map[i]
+
+                p.insert(first_run_idx, new_r)
+                run_map.insert(first_run_idx, (new_r, new_t.text))
+
+        xml_str = ET.tostring(root, encoding='utf-8').decode('utf-8')
+        return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n' + xml_str
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = DocxProcessorApp(root)
+    root.mainloop()
